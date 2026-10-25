@@ -26,7 +26,7 @@ class ReminderService {
     }
 
     const settings = InitializationSettings(
-      android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+      android: AndroidInitializationSettings('ic_stat_notebook'),
       iOS: DarwinInitializationSettings(
         requestAlertPermission: false,
         requestBadgePermission: false,
@@ -45,7 +45,6 @@ class ReminderService {
       final allowed =
           await android?.requestNotificationsPermission() ?? false;
       if (!allowed) return false;
-      await android?.requestExactAlarmsPermission();
       return true;
     }
 
@@ -63,14 +62,44 @@ class ReminderService {
     return true;
   }
 
-  Future<void> schedule({
+  static const _details = NotificationDetails(
+    android: AndroidNotificationDetails(
+      'note_reminders',
+      'Напоминания',
+      channelDescription: 'Напоминания о сохранённых заметках',
+      icon: 'ic_stat_notebook',
+      importance: Importance.max,
+      priority: Priority.high,
+    ),
+    iOS: DarwinNotificationDetails(
+      presentAlert: true,
+      presentBadge: true,
+      presentSound: true,
+    ),
+  );
+
+  Future<void> showTestNotification() async {
+    await initialize();
+    if (!await _requestPermission()) {
+      throw StateError('Уведомления запрещены. Разрешите их в настройках телефона.');
+    }
+    await _plugin.show(
+      id: -1,
+      title: 'Проверка блокнота',
+      body: 'Локальные уведомления работают без интернета.',
+      notificationDetails: _details,
+    );
+  }
+
+  /// Returns false when Android can only schedule an approximate alarm.
+  Future<bool> schedule({
     required int id,
     required String title,
     required String body,
     required DateTime at,
   }) async {
     await initialize();
-    if (at.isBefore(DateTime.now())) {
+    if (!at.isAfter(DateTime.now())) {
       throw ArgumentError('Время напоминания уже прошло.');
     }
 
@@ -81,27 +110,17 @@ class ReminderService {
       );
     }
 
-    const details = NotificationDetails(
-      android: AndroidNotificationDetails(
-        'note_reminders',
-        'Напоминания',
-        channelDescription: 'Напоминания о сохранённых заметках',
-        importance: Importance.max,
-        priority: Priority.high,
-      ),
-      iOS: DarwinNotificationDetails(
-        presentAlert: true,
-        presentBadge: true,
-        presentSound: true,
-      ),
-    );
-
     var scheduleMode = AndroidScheduleMode.exactAllowWhileIdle;
     if (defaultTargetPlatform == TargetPlatform.android) {
       final android = _plugin.resolvePlatformSpecificImplementation<
           AndroidFlutterLocalNotificationsPlugin>();
-      final exactAllowed =
+      var exactAllowed =
           await android?.canScheduleExactNotifications() ?? false;
+      if (!exactAllowed) {
+        await android?.requestExactAlarmsPermission();
+        exactAllowed =
+            await android?.canScheduleExactNotifications() ?? false;
+      }
       if (!exactAllowed) {
         scheduleMode = AndroidScheduleMode.inexactAllowWhileIdle;
       }
@@ -112,10 +131,15 @@ class ReminderService {
       title: title.isEmpty ? 'Напоминание из блокнота' : title,
       body: body.isEmpty ? 'Откройте заметку, которую сохранили.' : body,
       scheduledDate: tz.TZDateTime.from(at, tz.local),
-      notificationDetails: details,
+      notificationDetails: _details,
       androidScheduleMode: scheduleMode,
       payload: id.toString(),
     );
+    final pending = await _plugin.pendingNotificationRequests();
+    if (!pending.any((request) => request.id == id)) {
+      throw StateError('Система не подтвердила создание напоминания.');
+    }
+    return scheduleMode == AndroidScheduleMode.exactAllowWhileIdle;
   }
 
   Future<void> cancel(int id) async {

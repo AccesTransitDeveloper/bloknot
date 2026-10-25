@@ -77,7 +77,6 @@ class _NotebookHomeState extends State<NotebookHome> {
 
   Future<void> _loadNotes() async {
     try {
-      await ReminderService.instance.initialize();
       final prefs = await SharedPreferences.getInstance();
       final raw = prefs.getString(_storageKey);
       final decoded = raw == null ? <dynamic>[] : jsonDecode(raw) as List;
@@ -119,6 +118,52 @@ class _NotebookHomeState extends State<NotebookHome> {
       ..showSnackBar(SnackBar(content: Text(message)));
   }
 
+  Future<void> _checkNotifications() async {
+    try {
+      await ReminderService.instance.showTestNotification();
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Проверка уведомлений'),
+          content: const Text(
+            'Отправлено тестовое уведомление. Проверьте шторку уведомлений.\n\n'
+            'Если его нет: Настройки телефона → Приложения → Офлайн-блокнот → '
+            'Уведомления → включите уведомления и канал «Напоминания».\n\n'
+            'Для проверки времени создайте заметку с напоминанием через 2 минуты '
+            'и сверните приложение. Интернет не нужен. Разрешите «Будильники и '
+            'напоминания» и фоновую работу в настройках телефона.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Понятно'),
+            ),
+          ],
+        ),
+      );
+    } catch (error) {
+      await _showReminderError('$error');
+    }
+  }
+
+  Future<void> _showReminderError(String message) async {
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Уведомление не настроено'),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Понятно'),
+          ),
+        ],
+      ),
+    );
+  }
+
   List<Note> get _visibleNotes {
     final normalizedQuery = _query.trim().toLowerCase();
     return _notes.where((note) {
@@ -148,19 +193,19 @@ class _NotebookHomeState extends State<NotebookHome> {
         break;
       }
     }
-    if (existing?.reminderAt != null &&
-        existing!.reminderAt != result.reminderAt) {
-      await ReminderService.instance.cancel(existing.notificationId);
-    }
-
     final next = _sortNotes([
       ..._notes.where((item) => item.id != result.id),
       result,
     ]);
 
     try {
+      if (existing?.reminderAt != null &&
+          existing!.reminderAt != result.reminderAt) {
+        await ReminderService.instance.cancel(existing.notificationId);
+      }
+      var exactReminder = true;
       if (result.reminderAt != null) {
-        await ReminderService.instance.schedule(
+        exactReminder = await ReminderService.instance.schedule(
           id: result.notificationId,
           title: result.title,
           body: result.body,
@@ -173,14 +218,28 @@ class _NotebookHomeState extends State<NotebookHome> {
       _showMessage(
         result.reminderAt == null
             ? 'Заметка сохранена на устройстве'
-            : 'Заметка и напоминание сохранены',
+            : exactReminder
+                ? 'Заметка и напоминание сохранены'
+                : 'Напоминание сохранено. Без разрешения на точные будильники '
+                    'Android может значительно задержать уведомление.',
       );
     } catch (error) {
-      // Keep the note even when notification permission or scheduling fails.
-      await _persistNotes(next);
+      // Do not display a reminder as active when scheduling failed.
+      final withoutReminder = [
+        for (final item in next)
+          if (item.id == result.id)
+            item.copyWith(clearReminder: true)
+          else
+            item,
+      ];
+      await _persistNotes(withoutReminder);
       if (!mounted) return;
-      setState(() => _notes = next);
-      _showMessage('Заметка сохранена. $error');
+      setState(() => _notes = withoutReminder);
+      await _showReminderError(
+        'Заметка сохранена, но напоминание не установлено.\n\n$error\n\n'
+        'Проверьте разрешения уведомлений и Android-файлы по инструкции '
+        'ANDROID_SETUP.md, затем снова установите время в заметке.',
+      );
     }
   }
 
@@ -239,6 +298,14 @@ class _NotebookHomeState extends State<NotebookHome> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     _TopBar(totalNotes: _notes.length),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: TextButton.icon(
+                        onPressed: _checkNotifications,
+                        icon: const Icon(Icons.notifications_outlined),
+                        label: const Text('Проверить уведомления'),
+                      ),
+                    ),
                     const SizedBox(height: 26),
                     const Text(
                       'Ваш рабочий\nблокнот',

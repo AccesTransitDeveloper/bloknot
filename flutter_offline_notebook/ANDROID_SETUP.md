@@ -1,41 +1,86 @@
 # Настройка уведомлений Android
 
-Для напоминаний после закрытия приложения и перезагрузки телефона добавьте в
-`android/app/src/main/AndroidManifest.xml` разрешения внутри `<manifest>`:
+## Обязательные файлы
 
-```xml
-<uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
-<uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
-```
+После `flutter create offline_notebook` скопируйте содержимое папки
+`android/app/src/main/` из этих исходников в одноимённую папку созданного
+Flutter-проекта, объединяя каталоги:
 
-Внутри `<application>` добавьте получатели уведомлений:
+- `AndroidManifest.xml` — замените стандартный манифест нового проекта;
+- `res/drawable/ic_stat_notebook.xml` — отдельный одноцветный значок уведомлений;
+- `res/raw/keep.xml` — сохраняет этот ресурс при оптимизации release APK.
 
-```xml
-<receiver
-    android:exported="false"
-    android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver" />
-<receiver
-    android:enabled="false"
-    android:exported="false"
-    android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationBootReceiver">
-    <intent-filter>
-        <action android:name="android.intent.action.BOOT_COMPLETED" />
-        <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
-        <action android:name="android.intent.action.QUICKBOOT_POWERON" />
-        <action android:name="com.htc.intent.action.QUICKBOOT_POWERON" />
-    </intent-filter>
-</receiver>
-```
+Не удаляйте `MainActivity.kt`, темы, значки приложения и остальные
+сгенерированные файлы. Если вы уже меняли свой манифест, объедините разрешения
+и два `<receiver>` вручную, сохранив собственные настройки.
 
-Проверьте Gradle-настройки по документации `flutter_local_notifications`:
+В манифесте нужны разрешения `POST_NOTIFICATIONS`, `VIBRATE`,
+`RECEIVE_BOOT_COMPLETED` и `SCHEDULE_EXACT_ALARM`, получатели
+`ScheduledNotificationReceiver` и `ScheduledNotificationBootReceiver`.
+Получатель перезагрузки должен быть включён.
+
+Без `ScheduledNotificationReceiver` немедленные уведомления могут работать,
+а напоминания по времени — нет. Один только Dart-код не заменяет эти
+Android-настройки.
+
+## Gradle
+
+Проверьте требования `flutter_local_notifications`:
 
 - `compileSdk` не ниже 36;
 - Java/Kotlin target 17;
-- включён core library desugaring;
-- `com.android.tools:desugar_jdk_libs:2.1.4` добавлен в зависимости;
-- Android Gradle Plugin не ниже 8.11.1.
+- Android Gradle Plugin не ниже 8.11.1;
+- включён core library desugaring.
 
-Код запрашивает разрешения уведомлений и точных будильников у пользователя.
-Если разрешение на точное время не дано, Android может показать напоминание с
-небольшой задержкой. При отключённых уведомлениях приложение всё равно
-сохранит заметку, но напомнить не сможет.
+Для стандартного `android/app/build.gradle.kts` соответствующие части:
+
+```kotlin
+android {
+    compileSdk = 36
+    compileOptions {
+        isCoreLibraryDesugaringEnabled = true
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = JavaVersion.VERSION_17.toString()
+    }
+}
+
+dependencies {
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+}
+```
+
+Объедините с существующими блоками, не заменяйте файл целиком.
+Если ваш проект использует Groovy (`build.gradle`), синтаксис отличается.
+Для release-сборки также проверьте актуальные правила R8/ProGuard для GSON:
+https://pub.dev/packages/flutter_local_notifications#release-build-configuration
+
+## Проверка на телефоне
+
+1. Пересоберите APK: `flutter pub get`, `flutter build apk --release`.
+2. Установите обновление поверх старой версии с тем же applicationId и ключом
+   подписи. Не удаляйте старое приложение: вместе с ним удалятся заметки.
+3. Откройте приложение, нажмите «Проверить уведомления» и разрешите уведомления.
+   В шторке должно появиться тестовое сообщение. Интернет не нужен.
+4. Если сообщения нет, откройте настройки телефона → Приложения →
+   Офлайн-блокнот → Уведомления. Включите уведомления и канал «Напоминания»,
+   проверьте звук и режим «Не беспокоить».
+5. Создайте напоминание через 2 минуты. Разрешите «Будильники и напоминания»,
+   если система запросит. Если доступ запрещён, приложение предупредит:
+   приблизительное напоминание Android может задержать значительно, не только
+   на несколько секунд.
+6. Сверните приложение обычной кнопкой «Домой» и дождитесь напоминания.
+   На Xiaomi/Huawei/Oppo и других телефонах могут потребоваться разрешение
+   автозапуска и режим батареи «Без ограничений».
+7. Уже неработавшие напоминания откройте и установите заново на будущее время.
+
+Принудительная остановка через настройки Android блокирует работу приложения,
+включая напоминания, до следующего открытия. Это ограничение системы.
+Смахивание из списка недавних приложений на некоторых моделях тоже ограничивает
+фоновую работу. После перезагрузки восстановление выполняет boot receiver.
+
+Если тестовое сообщение приходит, а запланированное — нет, проверьте точные
+будильники, получатели в итоговом манифесте APK и ограничения батареи. Если
+приложение показывает ошибку, сохраните её текст для диагностики.
